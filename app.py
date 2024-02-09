@@ -53,7 +53,7 @@ Answer:
 
 
 def reply(query: str, index: IndexFlatL2):
-    embedding = CLIENT.embeddings(model="mistral-embed", input=query).data[0].embedding
+    embedding = embed(query)
     embedding = np.array([embedding])
 
     _, indexes = index.search(embedding, k=2)
@@ -101,9 +101,7 @@ def build_index():
 
     embeddings = []
     for i, chunk in enumerate(chunks):
-        embeddings.append(
-            CLIENT.embeddings(model="mistral-embed", input=chunk).data[0].embedding
-        )
+        embeddings.append(embed(chunk))
         progress.progress((i + 1) / len(chunks))
 
     embeddings = np.array(embeddings)
@@ -127,6 +125,11 @@ def stream_response(response):
         yield r.choices[0].delta.content
 
 
+@st.cache_data
+def embed(text: str):
+    return CLIENT.embeddings("mistral-embed", text).data[0].embedding
+
+
 if st.sidebar.button("🔴 Reset conversation"):
     st.session_state.messages = []
 
@@ -147,7 +150,7 @@ This is a simple demonstration of how to use a large language model
 and a vector database to implement a bare-bones chat-with-your-pdf
 application.
 
-This appplication uses [Mistral](mistral.ai) as language model, so to
+This appplication uses [Mistral](https://mistral.ai) as language model, so to
 deploy it you will need a corresponding API key.
 
 Read the [documentation](https://github.com/apiad/pdf-chat/blob/main/README.md) or
