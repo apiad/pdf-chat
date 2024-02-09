@@ -52,7 +52,7 @@ Answer:
 """
 
 
-def reply(query: str):
+def reply(query: str, index: IndexFlatL2):
     embedding = CLIENT.embeddings(model="mistral-embed", input=query).data[0].embedding
     embedding = np.array([embedding])
 
@@ -171,10 +171,10 @@ query = st.chat_input("Ask something about your PDF")
 
 
 if not st.session_state.messages:
-    reply("In one sentence, what is this document about?")
+    reply("In one sentence, what is this document about?", index)
     add_message("Ready to answer your questions.")
 
 
 if query:
     add_message(query, agent="human", stream=False, store=True)
-    reply(query)
+    reply(query, index)
