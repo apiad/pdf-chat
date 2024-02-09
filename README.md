@@ -64,8 +64,9 @@ the first time and stores it in the session state.
 displayed all the time, every query is independent. That is, the chatbot has no access to
 the previous context. This is easy to fix by passing the last few messages on the call to `client.chat_stream(...)`.
 - To save resources, documents with more than 100 chunks will error. This number can be changed in the source code.
-- There is no attempt to sanitize the input or output, so the model can behave erratically and exhibit biased and impolite replies if prompted with such intention.
+- There is no caching at all. The same document and the same query will consume API calls every time they are used. This is relatively easy to fix by caching the query before submission, but you cannot use `st.cache_*` because the response is a stream that is consumed asyncronously. You must cache it independently after the streaming is completed.
 - Only one chunk is retrieved for each query so if the question requires a longer context the model will give an incorrect answer.
+- There is no attempt to sanitize the input or output, so the model can behave erratically and exhibit biased and impolite replies if prompted with such intention.
 - All LLMs are subject to hallucinations so always double check your responses.
 
 ## Collaboration
