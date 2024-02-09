@@ -91,6 +91,11 @@ def build_index():
     chunk_size = 1024
     chunks = [text[i : i + 2 * chunk_size] for i in range(0, len(text), chunk_size)]
 
+    if len(chunks) > 100:
+        st.error("Document is too long!")
+        st.session_state.clear()
+        return
+
     st.sidebar.info(f"Indexing {len(chunks)} chunks.")
     progress = st.sidebar.progress(0)
 
