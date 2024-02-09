@@ -1,8 +1,10 @@
 import streamlit as st
 import os
+import numpy as np
 from pypdf import PdfReader
 from faiss import IndexFlatL2
 from mistralai.client import MistralClient
+from mistralai.models.chat_completion import ChatMessage, ChatCompletionStreamResponse
 import time
 
 st.set_page_config(page_title="Chat with your PDF", page_icon="📝")
@@ -13,6 +15,8 @@ if "messages" not in st.session_state:
 
 if st.sidebar.button("Reset conversation"):
     st.session_state.messages = []
+    st.session_state.pop("text")
+    st.session_state.pop("index")
 
 
 def add_message(msg, agent="ai", stream=True, store=True):
@@ -64,11 +68,17 @@ def get_client():
     return MistralClient(api_key=api_key)
 
 
+client: MistralClient = get_client()
+
+
 def upload_pdf():
+    st.session_state.messages = []
+
     pdf_file = st.session_state.pdf_file
 
     if not pdf_file:
         st.session_state.pop("text")
+        st.session_state.pop("index")
         return
 
     reader = PdfReader(pdf_file)
@@ -81,8 +91,72 @@ def upload_pdf():
 
     add_message(f"The uploaded PDF has {len(reader.pages)} pages and {len(text)} characters. I will index it now.", store=False)
 
-    client = get_client()
-    index = IndexFlatL2()
+    chunk_size = 1024
+    chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+    add_message(f"Indexing {len(chunks)} chunks.", store=False)
+    progress = st.progress(0)
+
+    embeddings = []
+    for i, chunk in enumerate(chunks):
+        embeddings.append(client.embeddings(
+                model="mistral-embed", input=chunk
+            ).data[0].embedding)
+        progress.progress((i+1) / len(chunks))
+
+    embeddings = np.array(embeddings)
+
+    dimension = embeddings.shape[1]
+    index = IndexFlatL2(dimension)
+    index.add(embeddings)
+
+    st.session_state.index = index
+    st.session_state.chunks = chunks
+
+    add_message("Ready to take your answers.", store=False)
 
 
 st.sidebar.file_uploader("Upload a PDF file", type="PDF", key="pdf_file", on_change=upload_pdf)
+
+
+if "index" not in st.session_state:
+    st.stop()
+
+
+index: IndexFlatL2 = st.session_state.index
+query = st.chat_input("Ask something about your PDF")
+
+
+PROMPT = """
+Context information is below.
+
+---------------------
+{context}
+---------------------
+
+Given the context information and not prior knowledge, answer the query.
+If the context does not provide enough information, decline to answer.
+Query: {query}
+Answer:
+"""
+
+def stream_response(response):
+    for r in response:
+        yield r.choices[0].delta.content
+
+
+if query:
+    add_message(query, agent="human", stream=False, store=True)
+
+    embedding = client.embeddings(
+                model="mistral-embed", input=query
+            ).data[0].embedding
+    embedding = np.array([embedding])
+
+    _, indexes = index.search(embedding, k=2)
+    context = [st.session_state.chunks[i] for i in indexes.tolist()[0]]
+
+    messages = [ChatMessage(role="user", content=PROMPT.format(context=context, query=query))]
+    response = client.chat_stream(model="mistral-small", messages=messages)
+
+    add_message(stream_response(response))
