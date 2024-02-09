@@ -7,16 +7,16 @@ from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage, ChatCompletionStreamResponse
 import time
 
-st.set_page_config(page_title="Chat with your PDF", page_icon="📝")
+st.set_page_config(page_title="Chat with your PDF", page_icon="📝", layout="wide")
 
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+@st.cache_resource
+def get_client():
+    api_key = os.environ["MISTRAL_API_KEY"]
+    return MistralClient(api_key=api_key)
 
-if st.sidebar.button("Reset conversation"):
-    st.session_state.messages = []
-    st.session_state.pop("text")
-    st.session_state.pop("index")
+
+CLIENT: MistralClient = get_client()
 
 
 def add_message(msg, agent="ai", stream=True, store=True):
@@ -34,14 +34,58 @@ def add_message(msg, agent="ai", stream=True, store=True):
         st.session_state.messages.append(dict(agent=agent, content=output))
 
 
+PROMPT = """
+An excerpt from a document is given below.
+
+---------------------
+{context}
+---------------------
+
+Given the document excerpt, answer the following query.
+If the context does not provide enough information, decline to answer.
+Do not output anything that can't be answered from the context.
+
+Query: {query}
+Answer:
+"""
+
+
+def reply(query: str):
+    embedding = CLIENT.embeddings(model="mistral-embed", input=query).data[0].embedding
+    embedding = np.array([embedding])
+
+    _, indexes = index.search(embedding, k=2)
+    context = [st.session_state.chunks[i] for i in indexes.tolist()[0]]
+
+    messages = [
+        ChatMessage(role="user", content=PROMPT.format(context=context, query=query))
+    ]
+    response = CLIENT.chat_stream(model="mistral-small", messages=messages)
+
+    add_message(stream_response(response))
+
+
 def stream_str(s, speed=250):
     for c in s:
         yield c
         time.sleep(1 / speed)
 
 
+def stream_response(response):
+    for r in response:
+        yield r.choices[0].delta.content
+
+
+if st.sidebar.button("🔴 Reset conversation"):
+    st.session_state.messages = []
+
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+
 for message in st.session_state.messages:
-    with st.chat_message(message['agent']):
+    with st.chat_message(message["agent"]):
         st.write(message["content"])
 
 
@@ -56,19 +100,11 @@ This appplication uses [Mistral](mistral.ai) as language model, so to
 deploy it you will need a corresponding API key.
 
 Read the [documentation](https://github.com/apiad/pdf-chat/blob/main/README.md) or
-[browse the code](https://github.com/apiad/pdf-chat) in Github.""", store=False
+[browse the code](https://github.com/apiad/pdf-chat) in Github.""",
+        store=False,
     )
 
     add_message("To begin, please upload your PDF file in the sidebar.", store=False)
-
-
-@st.cache_resource
-def get_client():
-    api_key = os.environ["MISTRAL_API_KEY"]
-    return MistralClient(api_key=api_key)
-
-
-client: MistralClient = get_client()
 
 
 def upload_pdf():
@@ -77,8 +113,7 @@ def upload_pdf():
     pdf_file = st.session_state.pdf_file
 
     if not pdf_file:
-        st.session_state.pop("text")
-        st.session_state.pop("index")
+        st.session_state.clear()
         return
 
     reader = PdfReader(pdf_file)
@@ -89,20 +124,22 @@ def upload_pdf():
 
     st.session_state.text = text
 
-    add_message(f"The uploaded PDF has {len(reader.pages)} pages and {len(text)} characters. I will index it now.", store=False)
+    st.sidebar.info(
+        f"The uploaded PDF has {len(reader.pages)} pages and {len(text)} characters."
+    )
 
     chunk_size = 1024
-    chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+    chunks = [text[i : i + 2 * chunk_size] for i in range(0, len(text), chunk_size)]
 
-    add_message(f"Indexing {len(chunks)} chunks.", store=False)
-    progress = st.progress(0)
+    st.sidebar.info(f"Indexing {len(chunks)} chunks.")
+    progress = st.sidebar.progress(0)
 
     embeddings = []
     for i, chunk in enumerate(chunks):
-        embeddings.append(client.embeddings(
-                model="mistral-embed", input=chunk
-            ).data[0].embedding)
-        progress.progress((i+1) / len(chunks))
+        embeddings.append(
+            CLIENT.embeddings(model="mistral-embed", input=chunk).data[0].embedding
+        )
+        progress.progress((i + 1) / len(chunks))
 
     embeddings = np.array(embeddings)
 
@@ -113,13 +150,12 @@ def upload_pdf():
     st.session_state.index = index
     st.session_state.chunks = chunks
 
-    add_message("Ready to take your answers.", store=False)
 
+pdf = st.sidebar.file_uploader(
+    "Upload a PDF file", type="PDF", key="pdf_file", on_change=upload_pdf
+)
 
-st.sidebar.file_uploader("Upload a PDF file", type="PDF", key="pdf_file", on_change=upload_pdf)
-
-
-if "index" not in st.session_state:
+if not pdf:
     st.stop()
 
 
@@ -127,36 +163,11 @@ index: IndexFlatL2 = st.session_state.index
 query = st.chat_input("Ask something about your PDF")
 
 
-PROMPT = """
-Context information is below.
-
----------------------
-{context}
----------------------
-
-Given the context information and not prior knowledge, answer the query.
-If the context does not provide enough information, decline to answer.
-Query: {query}
-Answer:
-"""
-
-def stream_response(response):
-    for r in response:
-        yield r.choices[0].delta.content
+if not st.session_state.messages:
+    reply("In one sentence, what is this document about?")
+    add_message("Ready to answer your questions.")
 
 
 if query:
     add_message(query, agent="human", stream=False, store=True)
-
-    embedding = client.embeddings(
-                model="mistral-embed", input=query
-            ).data[0].embedding
-    embedding = np.array([embedding])
-
-    _, indexes = index.search(embedding, k=2)
-    context = [st.session_state.chunks[i] for i in indexes.tolist()[0]]
-
-    messages = [ChatMessage(role="user", content=PROMPT.format(context=context, query=query))]
-    response = client.chat_stream(model="mistral-small", messages=messages)
-
-    add_message(stream_response(response))
+    reply(query)
