@@ -10,15 +10,6 @@ import time
 st.set_page_config(page_title="Chat with your PDF", page_icon="📝", layout="wide")
 
 
-@st.cache_resource
-def get_client():
-    api_key = os.environ["MISTRAL_API_KEY"]
-    return MistralClient(api_key=api_key)
-
-
-CLIENT: MistralClient = get_client()
-
-
 def add_message(msg, agent="ai", stream=True, store=True):
     if stream and isinstance(msg, str):
         msg = stream_str(msg)
@@ -32,6 +23,15 @@ def add_message(msg, agent="ai", stream=True, store=True):
 
     if store:
         st.session_state.messages.append(dict(agent=agent, content=output))
+
+
+@st.cache_resource
+def get_client():
+    api_key = os.environ["MISTRAL_API_KEY"]
+    return MistralClient(api_key=api_key)
+
+
+CLIENT: MistralClient = get_client()
 
 
 PROMPT = """
@@ -63,6 +63,50 @@ def reply(query: str):
     response = CLIENT.chat_stream(model="mistral-small", messages=messages)
 
     add_message(stream_response(response))
+
+
+def build_index():
+    st.session_state.messages = []
+
+    pdf_file = st.session_state.pdf_file
+
+    if not pdf_file:
+        st.session_state.clear()
+        return
+
+    reader = PdfReader(pdf_file)
+    text = ""
+
+    for page in reader.pages:
+        text += page.extract_text() + "\n\n"
+
+    st.session_state.text = text
+
+    st.sidebar.info(
+        f"The uploaded PDF has {len(reader.pages)} pages and {len(text)} characters."
+    )
+
+    chunk_size = 1024
+    chunks = [text[i : i + 2 * chunk_size] for i in range(0, len(text), chunk_size)]
+
+    st.sidebar.info(f"Indexing {len(chunks)} chunks.")
+    progress = st.sidebar.progress(0)
+
+    embeddings = []
+    for i, chunk in enumerate(chunks):
+        embeddings.append(
+            CLIENT.embeddings(model="mistral-embed", input=chunk).data[0].embedding
+        )
+        progress.progress((i + 1) / len(chunks))
+
+    embeddings = np.array(embeddings)
+
+    dimension = embeddings.shape[1]
+    index = IndexFlatL2(dimension)
+    index.add(embeddings)
+
+    st.session_state.index = index
+    st.session_state.chunks = chunks
 
 
 def stream_str(s, speed=250):
@@ -107,52 +151,8 @@ Read the [documentation](https://github.com/apiad/pdf-chat/blob/main/README.md) 
     add_message("To begin, please upload your PDF file in the sidebar.", store=False)
 
 
-def upload_pdf():
-    st.session_state.messages = []
-
-    pdf_file = st.session_state.pdf_file
-
-    if not pdf_file:
-        st.session_state.clear()
-        return
-
-    reader = PdfReader(pdf_file)
-    text = ""
-
-    for page in reader.pages:
-        text += page.extract_text() + "\n\n"
-
-    st.session_state.text = text
-
-    st.sidebar.info(
-        f"The uploaded PDF has {len(reader.pages)} pages and {len(text)} characters."
-    )
-
-    chunk_size = 1024
-    chunks = [text[i : i + 2 * chunk_size] for i in range(0, len(text), chunk_size)]
-
-    st.sidebar.info(f"Indexing {len(chunks)} chunks.")
-    progress = st.sidebar.progress(0)
-
-    embeddings = []
-    for i, chunk in enumerate(chunks):
-        embeddings.append(
-            CLIENT.embeddings(model="mistral-embed", input=chunk).data[0].embedding
-        )
-        progress.progress((i + 1) / len(chunks))
-
-    embeddings = np.array(embeddings)
-
-    dimension = embeddings.shape[1]
-    index = IndexFlatL2(dimension)
-    index.add(embeddings)
-
-    st.session_state.index = index
-    st.session_state.chunks = chunks
-
-
 pdf = st.sidebar.file_uploader(
-    "Upload a PDF file", type="PDF", key="pdf_file", on_change=upload_pdf
+    "Upload a PDF file", type="PDF", key="pdf_file", on_change=build_index
 )
 
 if not pdf:
