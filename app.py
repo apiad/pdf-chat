@@ -1,11 +1,13 @@
-import streamlit as st
 import os
+import time
+
 import numpy as np
-from pypdf import PdfReader
+import streamlit as st
 from faiss import IndexFlatL2
 from mistralai.client import MistralClient
-from mistralai.models.chat_completion import ChatMessage, ChatCompletionStreamResponse
-import time
+from mistralai.models.chat_completion import ChatMessage
+from pypdf import PdfReader
+
 
 st.set_page_config(page_title="Chat with your PDF", page_icon="📝", layout="wide")
 
